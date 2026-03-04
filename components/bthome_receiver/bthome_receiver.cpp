@@ -433,6 +433,21 @@ BTHomeDevice *BTHomeReceiverHub::find_device_(uint64_t address) {
   return nullptr;
 }
 
+void BTHomeReceiverHub::process_advertisement_for_all_devices_(uint64_t address, const std::vector<uint8_t> &service_data) {
+  // Process advertisement for all devices with matching MAC address
+  // (in case multiple device instances exist, e.g., one from hub config and one from sensor platform)
+  bool found_any = false;
+  for (auto *device : this->devices_) {
+    if (device->get_mac_address() == address) {
+      found_any = true;
+      device->parse_advertisement(service_data);
+    }
+  }
+  if (!found_any) {
+    ESP_LOGV(TAG, "No registered device found for address %012llX", address);
+  }
+}
+
 void BTHomeReceiverHub::cache_device_data_(uint64_t address, const uint8_t *data, size_t len) {
   uint32_t now = esp_timer_get_time() / 1000;
 
@@ -606,15 +621,14 @@ void BTHomeReceiverHub::process_nimble_advertisement(const struct ble_gap_disc_d
         }
 
         // Check if this device is registered
-        BTHomeDevice *device = this->find_device_(address);
-        if (device != nullptr) {
+        if (this->find_device_(address) != nullptr) {
           std::vector<uint8_t> service_data_vec(service_data, service_data + service_data_len);
           ESP_LOGV(TAG, "Processing BTHome data from registered device %02X:%02X:%02X:%02X:%02X:%02X (%d bytes)",
                    (uint8_t)((address >> 40) & 0xFF), (uint8_t)((address >> 32) & 0xFF),
                    (uint8_t)((address >> 24) & 0xFF), (uint8_t)((address >> 16) & 0xFF),
                    (uint8_t)((address >> 8) & 0xFF), (uint8_t)(address & 0xFF),
                    (int)service_data_vec.size());
-          device->parse_advertisement(service_data_vec);
+          this->process_advertisement_for_all_devices_(address, service_data_vec);
         }
         return;
       }
@@ -644,10 +658,10 @@ bool BTHomeReceiverHub::parse_device(const esphome::esp32_ble_tracker::ESPBTDevi
         this->cache_device_data_(address, service_data.data.data(), service_data.data.size());
       }
 
-      BTHomeDevice *device = this->find_device_(address);
-      if (device != nullptr) {
+      if (this->find_device_(address) != nullptr) {
         ESP_LOGV(TAG, "Processing BTHome advertisement from %012llX", address);
-        return device->parse_advertisement(service_data.data);
+        this->process_advertisement_for_all_devices_(address, service_data.data);
+        return true;
       }
       return false;
     }
@@ -820,23 +834,26 @@ void BTHomeDevice::parse_measurements_(const uint8_t *data, size_t len) {
     uint8_t object_id = data[pos++];
     ESP_LOGV(TAG, "Object ID: 0x%02X at offset %d", object_id, pos - 1);
 
-    // Get current index for this object_id (0 for first occurrence, 1 for second, etc.)
-    uint8_t current_index = object_id_counts[object_id]++;  // Post-increment
-
-    // Handle special types: button, dimmer, text, raw
+    // Handle special types: button, dimmer, text, raw (before general indexing)
     if (object_id == OBJECT_ID_BUTTON) {
       // Button event: object_id(1) + event_type(1)
+      // Button index is determined by sequence position (0 for first button, 1 for second, etc.)
       if (pos + 1 > len) {
         ESP_LOGW(TAG, "Incomplete button event");
         break;
       }
-      uint8_t event_data = data[pos++];
-      uint8_t button_index = (event_data >> 4) & 0x0F;  // Upper 4 bits
-      uint8_t event_type = event_data & 0x0F;           // Lower 4 bits
+      // Get button index from sequence count (before incrementing)
+      uint8_t button_index = object_id_counts[OBJECT_ID_BUTTON];
+      uint8_t event_type = data[pos++];  // Full byte event type
       ESP_LOGV(TAG, "Button event: index=%d, type=0x%02X", button_index, event_type);
       this->handle_button_event_(button_index, event_type);
+      // Increment count after using it
+      object_id_counts[OBJECT_ID_BUTTON]++;
       continue;
     }
+
+    // Get current index for this object_id (0 for first occurrence, 1 for second, etc.)
+    uint8_t current_index = object_id_counts[object_id]++;  // Post-increment
 
     if (object_id == OBJECT_ID_DIMMER) {
       // Dimmer event: object_id(1) + steps(1, signed)
@@ -983,11 +1000,18 @@ void BTHomeDevice::publish_sensor_value_(uint8_t object_id, uint8_t index, float
   for (auto *sensor_obj : this->sensors_) {
     if (sensor_obj->get_object_id() == object_id && sensor_obj->get_index() == index) {
       sensor_obj->get_sensor()->publish_state(value);
+      ESP_LOGD(TAG, "Published sensor value: object_id=0x%02X index=%d value=%.2f", object_id, index, value);
       return;
     }
   }
+  ESP_LOGD(TAG, "No sensor registered for object ID 0x%02X index %d (have %zu sensors registered)", 
+           object_id, index, this->sensors_.size());
+  // Log registered sensors for debugging
+  for (auto *sensor_obj : this->sensors_) {
+    ESP_LOGD(TAG, "  Registered: object_id=0x%02X index=%d", 
+             sensor_obj->get_object_id(), sensor_obj->get_index());
+  }
 #endif
-  ESP_LOGV(TAG, "No sensor registered for object ID 0x%02X index %d", object_id, index);
 }
 
 void BTHomeDevice::publish_binary_sensor_value_(uint8_t object_id, bool value) {
