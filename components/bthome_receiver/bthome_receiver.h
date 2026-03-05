@@ -293,6 +293,9 @@ class BTHomeReceiverHub : public Component {
   // Find a device by MAC address (linear search, efficient for small datasets)
   BTHomeDevice *find_device_(uint64_t address);
 
+  // Process advertisement for all devices with matching MAC address
+  void process_advertisement_for_all_devices_(uint64_t address, const std::vector<uint8_t> &service_data);
+
   // Cache device data for periodic dump
   void cache_device_data_(uint64_t address, const uint8_t *data, size_t len);
 
