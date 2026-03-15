@@ -10,7 +10,10 @@
 // Platform-specific includes
 #ifdef USE_ESP32
   #ifdef USE_BTHOME_NIMBLE
-    #include "esp_nimble_hci.h"
+    // ESP32-C6 uses an integrated controller with no VHCI layer; esp_nimble_hci.h is not available
+    #ifndef CONFIG_IDF_TARGET_ESP32C6
+      #include "esp_nimble_hci.h"
+    #endif
     #include "nimble/nimble_port.h"
     #include "nimble/nimble_port_freertos.h"
     #include "host/ble_hs.h"
@@ -126,11 +129,13 @@ void BTHome::setup() {
   ble_hs_cfg.sync_cb = nimble_on_sync_;
   ble_hs_cfg.reset_cb = nimble_on_reset_;
 
+  // Set flag before starting the task to avoid race with nimble_on_sync_ callback
+  this->nimble_initialized_ = true;
+
   // Start NimBLE host task
   nimble_port_freertos_init(nimble_host_task_);
 
   ESP_LOGD(TAG, "NimBLE initialized, waiting for sync...");
-  this->nimble_initialized_ = true;
 
   #else
   // Bluedroid stack initialization
