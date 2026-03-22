@@ -139,7 +139,7 @@ class BTHome : public Component {
   // Common settings
   uint16_t min_interval_{1000};
   uint16_t max_interval_{1000};
-  bool advertising_{false};
+  volatile bool advertising_{false};
 
   // Retransmission settings (for reliability, devices often send same packet multiple times)
   uint8_t retransmit_count_{0};       // Number of retransmissions (0 = disabled)
@@ -186,7 +186,7 @@ class BTHome : public Component {
   #ifdef USE_BTHOME_NIMBLE
     // NimBLE-specific members
     uint8_t nimble_own_addr_type_{0};
-    bool nimble_initialized_{false};
+    volatile bool nimble_initialized_{false};
     static BTHome *instance_;  // For NimBLE callbacks
     static void nimble_host_task_(void *param);
     static void nimble_on_sync_();
