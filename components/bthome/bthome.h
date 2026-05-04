@@ -75,7 +75,7 @@ struct BinarySensorMeasurement {
 #if defined(USE_ESP32) && defined(USE_BTHOME_BLUEDROID)
 using namespace esp32_ble;
 
-class BTHome : public Component, public GAPEventHandler, public Parented<ESP32BLE> {
+class BTHome : public Component, public Parented<ESP32BLE> {
 #else
 class BTHome : public Component {
 #endif
@@ -111,7 +111,7 @@ class BTHome : public Component {
 #endif
 
 #if defined(USE_ESP32) && defined(USE_BTHOME_BLUEDROID)
-  void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) override;
+  void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 #endif
 
  protected:
