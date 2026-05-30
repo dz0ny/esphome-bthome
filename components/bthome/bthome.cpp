@@ -383,7 +383,8 @@ void BTHome::build_advertisement_data_() {
     if (!this->measurements_.empty()) {
       size_t start_idx = this->current_sensor_index_;
       size_t count = this->measurements_.size();
-      size_t added = 0;
+      bool overflow = false;
+      size_t resume_idx = start_idx;
 
       // Rotate through measurements starting from current index
       for (size_t i = 0; i < count; i++) {
@@ -395,16 +396,27 @@ void BTHome::build_advertisement_data_() {
 
         // Check if measurement fits: object_id (1 byte) + data_bytes
         size_t encoded_size = 1 + measurement.data_bytes;
-        if (pos + encoded_size > MAX_BLE_ADVERTISEMENT_SIZE)
+        if (pos + encoded_size > MAX_BLE_ADVERTISEMENT_SIZE) {
+          // Resume the next advertisement at the sensor that just didn't fit.
+          overflow = true;
+          resume_idx = idx;
           break;
+        }
 
         pos += this->encode_measurement_(this->adv_data_ + pos, MAX_BLE_ADVERTISEMENT_SIZE - pos, measurement);
-        added++;
       }
 
-      // Advance index for next advertisement (rotate through all sensors)
-      if (added > 0 && added < count) {
-        this->current_sensor_index_ = (start_idx + added) % count;
+      // Advance the rotation cursor ONLY when the packet was truncated because
+      // it ran out of space. NaN/no-state sensors are silently skipped via
+      // `continue`, and historically that also bumped the cursor (because
+      // `added < count`), which made the per-packet layout shift every build
+      // whenever any broadcast sensor was occasionally NaN. Downstream
+      // consumers (Home Assistant's BTHome receiver, in particular) match
+      // measurements positionally and rely on a stable order whenever the
+      // payload fits in one packet — so we keep the cursor pinned in that
+      // case and only rotate when we actually need to split across packets.
+      if (overflow) {
+        this->current_sensor_index_ = resume_idx;
       }
     }
 #endif
@@ -413,7 +425,8 @@ void BTHome::build_advertisement_data_() {
     if (!this->binary_measurements_.empty()) {
       size_t start_idx = this->current_binary_index_;
       size_t count = this->binary_measurements_.size();
-      size_t added = 0;
+      bool overflow = false;
+      size_t resume_idx = start_idx;
 
       // Rotate through binary measurements starting from current index
       for (size_t i = 0; i < count; i++) {
@@ -423,17 +436,20 @@ void BTHome::build_advertisement_data_() {
         if (!measurement.sensor->has_state())
           continue;
 
-        if (pos + 2 > MAX_BLE_ADVERTISEMENT_SIZE)
+        if (pos + 2 > MAX_BLE_ADVERTISEMENT_SIZE) {
+          overflow = true;
+          resume_idx = idx;
           break;
+        }
 
         pos += this->encode_binary_measurement_(this->adv_data_ + pos, MAX_BLE_ADVERTISEMENT_SIZE - pos,
                                                  measurement.object_id, measurement.sensor->state);
-        added++;
       }
 
-      // Advance index for next advertisement
-      if (added > 0 && added < count) {
-        this->current_binary_index_ = (start_idx + added) % count;
+      // See the comment in the sensor loop above: rotate only on overflow,
+      // never on NaN/no-state skips.
+      if (overflow) {
+        this->current_binary_index_ = resume_idx;
       }
     }
 #endif
