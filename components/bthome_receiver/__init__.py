@@ -299,11 +299,13 @@ async def to_code(config):
         from esphome.components import esp32_ble_tracker
 
         # Register with the global BLE tracker (requires esp32_ble_tracker: in config)
-        # Get the tracker ID from config or use the default
+        # Use the official helper so the listener is counted for the
+        # ESPHOME_ESP32_BLE_TRACKER_LISTENER_COUNT StaticVector sizing.
+        # Manual parent.register_listener() bypasses the count and silently
+        # drops the last-registered listener at runtime (vector full).
         tracker_id = config.get(esp32_ble_tracker.CONF_ESP32_BLE_ID)
         if tracker_id is not None:
-            parent = await cg.get_variable(tracker_id)
-            cg.add(parent.register_listener(var))
+            await esp32_ble_tracker.register_ble_device(var, config)
 
     for device_conf in config.get(CONF_DEVICES, []):
         device_var = cg.new_Pvariable(device_conf[CONF_ID], var)
