@@ -166,9 +166,10 @@ class BTHome : public Component {
   size_t adv_data_len_{0};
   bool data_changed_{true};
 
-  // Measurement rotation (for splitting across multiple packets)
-  size_t current_sensor_index_{0};
-  size_t current_binary_index_{0};
+  // Measurement rotation (for splitting across multiple packets).
+  // A single cursor spans sensors and binary sensors combined, so rotation is
+  // fair across all measurements and no category can starve the other.
+  size_t current_index_{0};
 
   // Scan response data (device name + manufacturer)
   uint8_t scan_rsp_data_[MAX_BLE_ADVERTISEMENT_SIZE];

@@ -4,6 +4,7 @@
 
 #if defined(USE_ESP32) || defined(USE_NRF52)
 
+#include <algorithm>
 #include <cstring>
 #include <cmath>
 
@@ -378,65 +379,84 @@ void BTHome::build_advertisement_data_() {
     }
 #endif
   } else {
-    // Normal: add measurements with rotation (for splitting across packets)
+#if defined(USE_SENSOR) || defined(USE_BINARY_SENSOR)
+    // Normal path. Two independent concerns are handled in order:
+    //   1. Selection (rotation): decide *which* measurements go in this packet. When all
+    //      measurements don't fit in a single 31-byte advertisement they are split across
+    //      successive packets; a single cursor spanning sensors and binary sensors combined keeps
+    //      the rotation fair so neither category can starve the other.
+    //   2. Write order: BTHome requires object ids to be non-decreasing within a payload, so the
+    //      selected measurements are sorted by object_id before being encoded. Sensor and binary
+    //      sensor object id ranges overlap, which is why they must be ordered together, not
+    //      sequentially by category.
+    struct Entry {
+      uint8_t object_id;
+      uint8_t size;   // encoded size in bytes: 1 + data_bytes for sensors, 2 for binary sensors
+      bool is_binary;
+      uint16_t idx;   // index into measurements_ / binary_measurements_
+      bool valid;     // sensor currently has a (non-NaN) state
+    };
+    Entry entries[BTHOME_MAX_MEASUREMENTS + BTHOME_MAX_BINARY_MEASUREMENTS];
+    size_t n = 0;
+
 #ifdef USE_SENSOR
-    if (!this->measurements_.empty()) {
-      size_t start_idx = this->current_sensor_index_;
-      size_t count = this->measurements_.size();
-      size_t added = 0;
-
-      // Rotate through measurements starting from current index
-      for (size_t i = 0; i < count; i++) {
-        size_t idx = (start_idx + i) % count;
-        const auto &measurement = this->measurements_[idx];
-
-        if (!measurement.sensor->has_state() || std::isnan(measurement.sensor->state))
-          continue;
-
-        // Check if measurement fits: object_id (1 byte) + data_bytes
-        size_t encoded_size = 1 + measurement.data_bytes;
-        if (pos + encoded_size > MAX_BLE_ADVERTISEMENT_SIZE)
-          break;
-
-        pos += this->encode_measurement_(this->adv_data_ + pos, MAX_BLE_ADVERTISEMENT_SIZE - pos, measurement);
-        added++;
-      }
-
-      // Advance index for next advertisement (rotate through all sensors)
-      if (added > 0 && added < count) {
-        this->current_sensor_index_ = (start_idx + added) % count;
-      }
+    for (size_t i = 0; i < this->measurements_.size(); i++) {
+      const auto &m = this->measurements_[i];
+      bool valid = m.sensor->has_state() && !std::isnan(m.sensor->state);
+      entries[n++] = {m.object_id, (uint8_t) (1 + m.data_bytes), false, (uint16_t) i, valid};
     }
 #endif
-
 #ifdef USE_BINARY_SENSOR
-    if (!this->binary_measurements_.empty()) {
-      size_t start_idx = this->current_binary_index_;
-      size_t count = this->binary_measurements_.size();
-      size_t added = 0;
-
-      // Rotate through binary measurements starting from current index
-      for (size_t i = 0; i < count; i++) {
-        size_t idx = (start_idx + i) % count;
-        const auto &measurement = this->binary_measurements_[idx];
-
-        if (!measurement.sensor->has_state())
-          continue;
-
-        if (pos + 2 > MAX_BLE_ADVERTISEMENT_SIZE)
-          break;
-
-        pos += this->encode_binary_measurement_(this->adv_data_ + pos, MAX_BLE_ADVERTISEMENT_SIZE - pos,
-                                                 measurement.object_id, measurement.sensor->state);
-        added++;
-      }
-
-      // Advance index for next advertisement
-      if (added > 0 && added < count) {
-        this->current_binary_index_ = (start_idx + added) % count;
-      }
+    for (size_t i = 0; i < this->binary_measurements_.size(); i++) {
+      const auto &m = this->binary_measurements_[i];
+      entries[n++] = {m.object_id, 2, true, (uint16_t) i, m.sensor->has_state()};
     }
 #endif
+
+    if (n > 0) {
+      // Rotate from the current cursor, selecting entries that still fit in this packet.
+      size_t selected[BTHOME_MAX_MEASUREMENTS + BTHOME_MAX_BINARY_MEASUREMENTS];
+      size_t selected_count = 0;
+      size_t probe_pos = pos;
+      size_t start_idx = this->current_index_ % n;
+
+      for (size_t i = 0; i < n; i++) {
+        size_t idx = (start_idx + i) % n;
+        if (!entries[idx].valid)
+          continue;
+        if (probe_pos + entries[idx].size > MAX_BLE_ADVERTISEMENT_SIZE)
+          break;
+        probe_pos += entries[idx].size;
+        selected[selected_count++] = idx;
+      }
+
+      // Advance the cursor so the next packet continues where this one left off. Only meaningful
+      // when the payload was split (some measurements didn't fit); if everything fit, leave it.
+      if (selected_count > 0 && selected_count < n) {
+        this->current_index_ = (start_idx + selected_count) % n;
+      }
+
+      // Emit selected entries in ascending object_id order (stable: equal ids keep insertion order).
+      std::stable_sort(selected, selected + selected_count,
+                       [&entries](size_t a, size_t b) { return entries[a].object_id < entries[b].object_id; });
+
+      for (size_t i = 0; i < selected_count; i++) {
+        const Entry &e = entries[selected[i]];
+        if (e.is_binary) {
+#ifdef USE_BINARY_SENSOR
+          const auto &m = this->binary_measurements_[e.idx];
+          pos += this->encode_binary_measurement_(this->adv_data_ + pos, MAX_BLE_ADVERTISEMENT_SIZE - pos,
+                                                   m.object_id, m.sensor->state);
+#endif
+        } else {
+#ifdef USE_SENSOR
+          pos += this->encode_measurement_(this->adv_data_ + pos, MAX_BLE_ADVERTISEMENT_SIZE - pos,
+                                            this->measurements_[e.idx]);
+#endif
+        }
+      }
+    }
+#endif  // USE_SENSOR || USE_BINARY_SENSOR
   }
 
   size_t measurement_len = pos - measurement_start;
@@ -474,11 +494,7 @@ void BTHome::build_advertisement_data_() {
   this->packet_id_++;
 
   ESP_LOGD(TAG, "Built advertisement data (%zu bytes, packet_id=%u)", this->adv_data_len_, (uint8_t)(this->packet_id_ - 1));
-#ifdef USE_SENSOR
-  if (this->measurements_.size() > 1) {
-    ESP_LOGD(TAG, "  Sensor rotation index: %zu/%zu", this->current_sensor_index_, this->measurements_.size());
-  }
-#endif
+  ESP_LOGD(TAG, "  Measurement rotation index: %zu", this->current_index_);
 }
 
 void BTHome::build_scan_response_data_() {
