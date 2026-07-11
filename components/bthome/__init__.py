@@ -334,6 +334,11 @@ async def to_code(config):
             add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_ROLE_OBSERVER", False)
             add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_ROLE_PERIPHERAL", False)
             add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_ROLE_BROADCASTER", True)
+            # Broadcaster needs no connections, so disable the Security Manager
+            # and host-based privacy (RPA) to avoid triggering
+            # an "undefined reference to ble_sm_alg_encrypt" on classic ESP32.
+            add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_SECURITY_ENABLE", False)
+            add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY", False)
             # Use tinycrypt for smaller footprint (saves ~7KB)
             add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_CRYPTO_STACK_MBEDTLS", False)
         else:
