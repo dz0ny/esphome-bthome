@@ -14,7 +14,6 @@
 
 // Platform-specific includes
 #ifdef USE_ESP32
-  #include <esp_timer.h>  // For esp_timer_get_time()
   #ifdef USE_BTHOME_NIMBLE
     // NimBLE stack (lighter weight, broadcast-only)
     #include "esp_nimble_hci.h"
