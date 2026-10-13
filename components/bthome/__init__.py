@@ -319,6 +319,18 @@ async def to_code(config):
     if CORE.is_esp32:
         from esphome.components.esp32 import add_idf_sdkconfig_option
 
+        # Recent ESPHome versions exclude the ESP-IDF "bt" component by default
+        # and only re-include it via request_bluetooth(). The NimBLE path does
+        # not go through esp32_ble, so without this call the BT headers
+        # (e.g. esp_nimble_hci.h) are missing. Older versions don't have the
+        # function and don't exclude "bt" either.
+        try:
+            from esphome.components.esp32 import request_bluetooth
+        except ImportError:
+            request_bluetooth = None
+        if request_bluetooth is not None:
+            request_bluetooth()
+
         ble_stack = config.get(CONF_BLE_STACK, BLE_STACK_BLUEDROID)
 
         if ble_stack == BLE_STACK_NIMBLE:
